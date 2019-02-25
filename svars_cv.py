@@ -142,13 +142,36 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         if restriction_matrix is not None:
             na_elements = np.isnan(restriction_matrix)
             B_hat = restriction_matrix
+<<<<<<< HEAD
+            B_hat[na_elements] = MLE.x[0:sum(na_elements)]
+            lambda_hat = np.diag(MLE.x[sum(na_elements) + 1 : len(MLE.x)])
+        else:
+            B_hat = np.array(MLE.x[0:(k*k)]).reshape((-1,k))
+            lambda_hat = np.diag(MLE.x[(k*k+1):(k*k+k)])
+            restrictions = 0
+        
+        #TODO: Minimum von MLE herausfinden
+        ll = MLE.min()
+
+        yl = y
+
+=======
             B_hat[na_elements] = #MLE$estimate
+>>>>>>> parent of 528cff2... done
 
         return True
     
     def _likelihood(self):
         pass
-
+    def _y_lag_cr(self, y, lag_length):
+        y_lag = np.array(NA, y.shape()[0], y.shape()[1] * lag_length)
+        for i in range(0,lag_length):
+            y_lag[(1+i):y.shape()[0], (((i-1) * y.shape()[1]) + 1):(i*y.shape()[1])] = y[0:y.shape()[0] - i), (0:y.shape()[0])]
+        
+        y_lag_mask = np.ones(len(y_lag), dtype=bool)
+        y_lag_mask[0:lag_length)] = False
+        y_lag = np.asmatrix(y_lag[y_lag_mask,])
+        out = {'lags':y_lag}
 
     def _get_init_params(self, A_guess, B_guess):
         pass
