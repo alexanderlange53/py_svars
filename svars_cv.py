@@ -12,6 +12,7 @@ from statsmodels.compat.python import range
 import numpy as np
 import numpy.linalg as npl
 from numpy.linalg import slogdet
+from scipy.linalg import solve
 
 from statsmodels.tools.numdiff import (approx_hess, approx_fprime)
 from statsmodels.tools.decorators import cache_readonly
@@ -142,7 +143,6 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         if restriction_matrix is not None:
             na_elements = np.isnan(restriction_matrix)
             B_hat = restriction_matrix
-<<<<<<< HEAD
             B_hat[na_elements] = MLE.x[0:sum(na_elements)]
             lambda_hat = np.diag(MLE.x[sum(na_elements) + 1 : len(MLE.x)])
         else:
@@ -155,23 +155,46 @@ class SVAR_CV(tsbase.TimeSeriesModel):
 
         yl = y
 
-=======
-            B_hat[na_elements] = #MLE$estimate
->>>>>>> parent of 528cff2... done
+        # B_hat[na_elements] = #MLE$estimate
 
         return True
     
-    def _likelihood(self):
-        pass
+    def _likelihood(self, S, Tob, sigma_hat1, k, sigma_hat2, restriction_matrix, restrictions):
+        if restriction_matrix is not None:
+            #if restriction_matrix is not matrix:
+            #    raise ValueError("Please provide a valide input matrix")
+            na_elements = np.isnan(restriction_matrix)
+            to_fill_matrix = restriction_matrix
+            to_fill_matrix[na_elements] = S[:np.sum(na_elements)]
+            W = to_fill_matrix
+        else:
+            W = np.asmatrix(S[:(k*k)].reshape((k,-1)))
+            restrictions = 0
+        
+        Psi = np.diag(S[(k*k-restrictions):(k*k+k-restrictions)])
+
+        MMM = np.cross(W,W.T)
+        MMM2 = W @ np.cross(Psi,W.T) 
+        MW = np.linalg.det(MMM)
+        MW2 = np.linalg.det(MMM2)
+
+        if any(Psi < 0 or MW < 0.01 or MW2 < 0.01): #Wieso hier any und or?
+            return 1e25
+        
+        L = -(((TB-1) / 2) * (np.log(MW) + np.sum(np.diag((sigma_hat1 @ solve(MMM)))))) - 
+            (((Tob - TB + 1) / 2) * (np.log(MW2) + np.sum(np.diag((sigma_hat2 @ solve(MMM2))))))
+
+        return -L
+
     def _y_lag_cr(self, y, lag_length):
-        y_lag = np.array(NA, y.shape()[0], y.shape()[1] * lag_length)
-        for i in range(0,lag_length):
-            y_lag[(1+i):y.shape()[0], (((i-1) * y.shape()[1]) + 1):(i*y.shape()[1])] = y[0:y.shape()[0] - i), (0:y.shape()[0])]
+        y_lag = np.full((y.shape()[0], y.shape()[1] * lag_length), np.nan)
+        for i in range(lag_length):
+            y_lag[(1+i):y.shape()[0], (((i-1) * y.shape()[1]) + 1):(i*y.shape()[1])] = y[:(y.shape()[0] - i), :y.shape()[0]]
         
         y_lag_mask = np.ones(len(y_lag), dtype=bool)
-        y_lag_mask[0:lag_length)] = False
+        y_lag_mask[:lag_length] = False
         y_lag = np.asmatrix(y_lag[y_lag_mask,])
-        out = {'lags':y_lag}
+        out = {'lags':y_lag} #In R wird eine list zurückgegeben...
 
     def _get_init_params(self, A_guess, B_guess):
         pass
