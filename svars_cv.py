@@ -13,6 +13,8 @@ import numpy as np
 import numpy.linalg as npl
 from numpy.linalg import slogdet
 from scipy.linalg import solve
+import pandas as pd 
+from functools import partial
 
 from statsmodels.tools.numdiff import (approx_hess, approx_fprime)
 from statsmodels.tools.decorators import cache_readonly
@@ -77,6 +79,7 @@ class SVAR_CV(tsbase.TimeSeriesModel):
                 freq=freq, format=format, date_vector = date_vector)
         
         TB = self.SB - self.p
+        self.max_iter = max_iter
 
         resid1 = self.u[1:TB-1,]
         resid2 = self.u[TB:self.Tob,]
@@ -84,8 +87,20 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         sigma_hat2 = np.cross(resid2, resid2) / (self.Tob-TB+1)
 
         if(restriction_matrix != None):
-            result_unrestricted = self._identify_volatility(self.endog ,self.SB, u=self.u, k=self.k, y=None, restriction_matrix=restriction_matrix, sigma_hat1=sigma_hat1,\
+            result_unrestricted = self._identify_volatility(self.endog ,self.SB, u=self.u, k=self.k, y=None, restriction_matrix=None, sigma_hat1=sigma_hat1,\
         sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=type)
+            result = self._identify_volatility(self.endog ,self.SB, u=self.u, k=self.k, y=None, restriction_matrix=restriction_matrix, sigma_hat1=sigma_hat1,\
+        sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=type)
+            l_ratio_test_statistics = 2 * (result_unrestricted.lik - result.lik)
+            #TODO: pchisq aus R herausfinden
+            p_value = np.round(1 - pchisq(l_ratio_test_statistics, result.restrictions), 4)
+
+            #TODO: Dataframe-Magie umsetzen ;)
+            l_ratio_test = pd.DataFrame()
+        else:
+            restriction_matrix = None
+            result = self._identify_volatility(self.endog ,self.SB, u=self.u, k=self.k, y=None, restriction_matrix=restriction_matrix, sigma_hat1=sigma_hat1,\
+        
         #TODO: Skript zum Testen der Klasse schreiben!!!
 
 
@@ -93,6 +108,7 @@ class SVAR_CV(tsbase.TimeSeriesModel):
             ic=None, trend='c', verbose=False, s_method='mle',
             solver="bfgs", override=False, maxiter=500, maxfun=500):
         pass
+
     def _get_var_object(self, endog):
         """Get VAR object from Class VARResultsWrapper"""
         if(type(endog) != VARResultsWrapper):
@@ -153,9 +169,76 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         #TODO: Minimum von MLE herausfinden
         ll = MLE.min()
 
-        yl = y
+        yl = self._y_lag_cr(self.y.T, p)['lags']
+        yret = y
+        y = y[]
+        y_mask = np.ones(len(y), dtype=bool)
+        y_mask[:p] = False
+        y = y[,y_mask])
 
-        # B_hat[na_elements] = #MLE$estimate
+        if x.type == 'c':
+            Z_t = np.vstack(np.ones(yl.shape[1]), yl)
+        elif x.type == 't':
+            Z_t = np.vstack(np.arange(p+1,yret.shape[1]), yl)
+        elif x.type == 'b':
+            Z_t = np.vstack(np.ones(yl.shape[1]), np.arange(p+1,yret.shape[1]), yl)
+        else:
+            Z_t = yl
+        
+        lambda_hat = {1:lambda_hat}
+        B_hat = {1:B_hat}
+        ll = {1: ll}
+        MLE_gls_loop = {1: MLE}
+        GLSE = {1: None}
+
+        counter = 1
+        Exit = 1
+        while np.abs(Exit) > crit and counter < self.max_iter:
+            sig1 = solve(B_hat[counter]@B_hat[counter].T)
+            sig2 = solve(B_hat[counter]@(lambda_hat[counter]@B_hat[counter].T)
+
+        #TODO: map über die Spalten nachgucken
+        GLS1_1 = np.sum(map(partial(gls1, sig= sig1), Z_t[,0:(TB-1)]) axis=1) #sum of each row
+        GLS1_2 = np.sum(map(partial(gls1, sig= sig2), Z_t[, TB:Z_t.shape[1]]) axis=1) #sum of each row
+
+        if x.type == None:
+            GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p,-1))
+            GLS2_1 = np.zeros((k*k*p, TB-1))
+            GLS2_2 = np.zeros((k*k*p, y.shape[1]))
+        elif x.type == 'c' or x.type == 't':
+            GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p+k,-1))
+            GLS2_1 = np.zeros((k*k*p+k, TB-1))
+            GLS2_2 = np.zeros((k*k*p+k, y.shape[1]))
+        elif x.type == 'b':
+            GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p+k+k,-1))
+            GLS2_1 = np.zeros((k*k*p+k+k, TB-1))
+            GLS2_2 = np.zeros((k*k*p+k+k, y.shape[1]))
+        
+        for i in range(TB):
+            GLS2_1[,i] = np.kron(Z_t[,i], sig1) @ y[,i]
+        for i in range(TB:(Z_t.shape[1]+1)):
+            GLS2_2[,i] = np.kron(Z_t[,i], sig2) @ y[,i]
+        
+        GLS2_1 = np.sum(GLS2_1, axis=1)
+        GLS2_2 = np.sum(GLS2_2, axis=1)
+        GLS2 = GLS2_1 + GLS2_2
+
+        GLS_hat = GLS1 @ GLS2
+
+        term1 = map(partial(resid_gls, k=k, GLS_hat=GLS_hat), Z_t)
+        ugls = y.T - term1.T
+
+        resid1gls = ugls[0:TB,]
+        resid2gls = ugls[TB:self.Tob,]
+        sigma_hat1gls = resid1gls.T @ resid1gls / (TB-1) 
+        sigma_hat2gls = resid2gls.T @ resid1gls / (self.Tob-TB+1)
+
+        # Determine starting values for B and Lambda
+        if restriction_matrix is not None:
+            
+
+ 
+ 
 
         return True
     
@@ -195,6 +278,15 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         y_lag_mask[:lag_length] = False
         y_lag = np.asmatrix(y_lag[y_lag_mask,])
         out = {'lags':y_lag} #In R wird eine list zurückgegeben...
+        return out
+    
+    def _gls1(self, Z, sig):
+        G = np.kron(Z@Z.T, sig)
+        return G
+    
+    def _resid_gls(self, Z_t, k, GLS_hat):
+        term1 = np.kron(Z_t.T,np.ones(k))@GLS_hat
+        return term1
 
     def _get_init_params(self, A_guess, B_guess):
         pass
