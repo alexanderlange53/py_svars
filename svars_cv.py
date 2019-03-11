@@ -100,14 +100,9 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         else:
             restriction_matrix = None
             result = self._identify_volatility(self.endog ,self.SB, u=self.u, k=self.k, y=None, restriction_matrix=restriction_matrix, sigma_hat1=sigma_hat1,\
-        
+                                                sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=type)
+         
         #TODO: Skript zum Testen der Klasse schreiben!!!
-
-
-    def fit(self, A_guess=None, B_guess=None, maxlags=None, method='ols',
-            ic=None, trend='c', verbose=False, s_method='mle',
-            solver="bfgs", override=False, maxiter=500, maxfun=500):
-        pass
 
     def _get_var_object(self, endog):
         """Get VAR object from Class VARResultsWrapper"""
@@ -167,14 +162,14 @@ class SVAR_CV(tsbase.TimeSeriesModel):
             restrictions = 0
         
         #TODO: Minimum von MLE herausfinden
-        ll = MLE.min()
+        ll = MLE.x
 
         yl = self._y_lag_cr(self.y.T, p)['lags']
         yret = y
-        y = y[]
+        # y = y[]
         y_mask = np.ones(len(y), dtype=bool)
         y_mask[:p] = False
-        y = y[,y_mask])
+        y = y[y_mask]
 
         if x.type == 'c':
             Z_t = np.vstack(np.ones(yl.shape[1]), yl)
@@ -184,7 +179,9 @@ class SVAR_CV(tsbase.TimeSeriesModel):
             Z_t = np.vstack(np.ones(yl.shape[1]), np.arange(p+1,yret.shape[1]), yl)
         else:
             Z_t = yl
-        
+
+        # R Funktionen in Klassenmethoden umgewandelt
+
         lambda_hat = {1:lambda_hat}
         B_hat = {1:B_hat}
         ll = {1: ll}
@@ -195,50 +192,71 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         Exit = 1
         while np.abs(Exit) > crit and counter < self.max_iter:
             sig1 = solve(B_hat[counter]@B_hat[counter].T)
-            sig2 = solve(B_hat[counter]@(lambda_hat[counter]@B_hat[counter].T)
+            sig2 = solve(B_hat[counter]@(lambda_hat[counter]@B_hat[counter].T))
 
-        #TODO: map über die Spalten nachgucken
-        GLS1_1 = np.sum(map(partial(gls1, sig= sig1), Z_t[,0:(TB-1)]) axis=1) #sum of each row
-        GLS1_2 = np.sum(map(partial(gls1, sig= sig2), Z_t[, TB:Z_t.shape[1]]) axis=1) #sum of each row
+            GLS1_1 = np.sum(np.apply_along_axis(partial(self._gls1, sig=sig1), axis=1, arr=Z_t[:,:(TB-1)]), axis=1) #sum of each row
+            GLS1_2 = np.sum(np.apply_along_axis(partial(self._gls1, sig=sig2), axis=1, arr=Z_t[:,TB:Z_t.shape[1]]), axis=1) #sum of each row
 
-        if x.type == None:
-            GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p,-1))
-            GLS2_1 = np.zeros((k*k*p, TB-1))
-            GLS2_2 = np.zeros((k*k*p, y.shape[1]))
-        elif x.type == 'c' or x.type == 't':
-            GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p+k,-1))
-            GLS2_1 = np.zeros((k*k*p+k, TB-1))
-            GLS2_2 = np.zeros((k*k*p+k, y.shape[1]))
-        elif x.type == 'b':
-            GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p+k+k,-1))
-            GLS2_1 = np.zeros((k*k*p+k+k, TB-1))
-            GLS2_2 = np.zeros((k*k*p+k+k, y.shape[1]))
-        
-        for i in range(TB):
-            GLS2_1[,i] = np.kron(Z_t[,i], sig1) @ y[,i]
-        for i in range(TB:(Z_t.shape[1]+1)):
-            GLS2_2[,i] = np.kron(Z_t[,i], sig2) @ y[,i]
-        
-        GLS2_1 = np.sum(GLS2_1, axis=1)
-        GLS2_2 = np.sum(GLS2_2, axis=1)
-        GLS2 = GLS2_1 + GLS2_2
-
-        GLS_hat = GLS1 @ GLS2
-
-        term1 = map(partial(resid_gls, k=k, GLS_hat=GLS_hat), Z_t)
-        ugls = y.T - term1.T
-
-        resid1gls = ugls[0:TB,]
-        resid2gls = ugls[TB:self.Tob,]
-        sigma_hat1gls = resid1gls.T @ resid1gls / (TB-1) 
-        sigma_hat2gls = resid2gls.T @ resid1gls / (self.Tob-TB+1)
-
-        # Determine starting values for B and Lambda
-        if restriction_matrix is not None:
+            if x.type == None:
+                GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p,-1)))
+                GLS2_1 = np.zeros((k*k*p, TB-1))
+                GLS2_2 = np.zeros((k*k*p, y.shape[1]))
+            elif x.type == 'c' or x.type == 't':
+                GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p+k,-1)))
+                GLS2_1 = np.zeros((k*k*p+k, TB-1))
+                GLS2_2 = np.zeros((k*k*p+k, y.shape[1]))
+            elif x.type == 'b':
+                GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p+k+k,-1)))
+                GLS2_1 = np.zeros((k*k*p+k+k, TB-1))
+                GLS2_2 = np.zeros((k*k*p+k+k, y.shape[1]))
             
+            for i in range(TB):
+                GLS2_1[:,i] = np.kron(Z_t[:,i], sig1) @ y[:,i]
+            for i in range(TB,Z_t.shape[1]+1):
+                GLS2_2[:,i] = np.kron(Z_t[:,i], sig2) @ y[:,i]
+            
+            GLS2_1 = np.sum(GLS2_1, axis=1)
+            GLS2_2 = np.sum(GLS2_2, axis=1)
+            GLS2 = GLS2_1 + GLS2_2
 
- 
- 
+            GLS_hat = GLS1 @ GLS2
+
+            term1 = map(partial(resid_gls, k=k, GLS_hat=GLS_hat), Z_t)
+            ugls = y.T - term1.T
+
+            resid1gls = ugls[:TB,]
+            resid2gls = ugls[TB:self.Tob,]
+            sigma_hat1gls = resid1gls.T @ resid1gls / (TB-1) 
+            sigma_hat2gls = resid2gls.T @ resid1gls / (self.Tob-TB+1)
+
+            # Determine starting values for B and Lambda
+            if restriction_matrix is not None:
+                B = np.linalg.cholesky(1/self.Tob * (u.T@u)).T
+                na_elements = np.isnan(restriction_matrix)
+                B = B[na_elements]
+                restrictions = len(restriction_matrix[~np.isnan(restriction_matrix)])
+            else:
+                B = np.linalg.cholesky(1/self.Tob * (u.T@u)).T
+
+            lambda_ = np.ones((k,1))
+            S = [B, lambda_]
+
+            # optimize the likelihood function
+            # TODO: Übergeben von Parametern
+            MLE_gls = sopt.minimize(fun=self._likelihood)
+
+            if restriction_matrix is not None:
+                na_elements = np.isnan(restriction_matrix)
+                B_hatg = restriction_matrix
+                B_hatg[na_elements] = MLE_gls.x[:np.sum(na_elements)]
+            else:
+                B_hatg = MLE_gls.x[:k*k].reshape(k,-1)
+                lambda_hatg = np.diag(MLE_gls.x[k*k+1:k*k+k])
+            
+            ll_g = MLE_gls.x
+
+            B_hat = [B_hat, B_hatg] # Müssen das wirklich Listen/Dictionaries sein?
+            # weiter in R Zeile 141
 
         return True
     
@@ -280,7 +298,7 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         out = {'lags':y_lag} #In R wird eine list zurückgegeben...
         return out
     
-    def _gls1(self, Z, sig):
+    def _gls1(self, sig, Z):
         G = np.kron(Z@Z.T, sig)
         return G
     
