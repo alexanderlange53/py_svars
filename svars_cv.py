@@ -182,11 +182,11 @@ class SVAR_CV(tsbase.TimeSeriesModel):
 
         # R Funktionen in Klassenmethoden umgewandelt
 
-        lambda_hat = {1:lambda_hat}
-        B_hat = {1:B_hat}
-        ll = {1: ll}
-        MLE_gls_loop = {1: MLE}
-        GLSE = {1: None}
+        lambda_hat = {0:lambda_hat}
+        B_hat = {0:B_hat}
+        ll = {0: ll}
+        MLE_gls_loop = {0: MLE}
+        GLSE = {0: None}
 
         counter = 1
         Exit = 1
@@ -255,9 +255,45 @@ class SVAR_CV(tsbase.TimeSeriesModel):
             
             ll_g = MLE_gls.x
 
-            B_hat = [B_hat, B_hatg] # Müssen das wirklich Listen/Dictionaries sein?
-            # weiter in R Zeile 141
+            lambda_hat[counter] = lambda_hatg
+            B_hat[counter] = B_hatg
+            ll[counter] = ll_g
+            GLSE[counter] = GLSE_hat
+            MLE_gls_loop[counter] = MLE_gls
+            Exit = ll[counter] - ll[counter - 1]
+            counter += 1
+        
+        ll = np.array(list(ll.values()))
+        cc = ll.argmin()
+        llf = ll[cc]
+        B_hat = B_hat[cc]
+        lambda_hat = lambda_hat[cc]
+        GLSE = GLSE[cc]
+        if GLSE is not None:
+            GLSE.reshape((k,-1))
+        MLEgls = MLE_gls_loop[cc]
 
+        # obtaining standard errors from inverse fisher information matrix
+        HESS = solve(MLE_gls.hes)
+
+        for i in range(HESS.shape()[0]):
+            if(HESS[i,i] < 0):
+                HESS[:,i] = -HESS[:,i]
+        
+        if restriction_matrix is not None:
+            un_restrictions = k*k - restrictions
+            fish_obs = np.sqrt(np.diag(HESS))
+            B_SE = restriction_matrix
+            B_SE[na_elements] = fish_obs[:un_restrictions]
+            lambda_SE = fish_obs[k*k-restrictions:k*k+k-restrictions] * np.diag(k)
+        else:
+            fish_obs = np.sqrt(np.diag(HESS))
+            B_SE = fish_obs[:k*k].reshape((k,k))
+            lambda_SE = np.diag(fish_obs[k*k:k*k+k])
+        
+        # Testing the estimated SVAR for identification by means of wald statistic
+        # TODO: Implement _wald_test
+        
         return True
     
     def _likelihood(self, S, Tob, sigma_hat1, k, sigma_hat2, restriction_matrix, restrictions):
@@ -305,6 +341,10 @@ class SVAR_CV(tsbase.TimeSeriesModel):
     def _resid_gls(self, Z_t, k, GLS_hat):
         term1 = np.kron(Z_t.T,np.ones(k))@GLS_hat
         return term1
+    
+    def _wald_test(lambda, sigma, restrictions):
+        k = len(np.diag(lambda))
+        # k_list = 
 
     def _get_init_params(self, A_guess, B_guess):
         pass
