@@ -15,6 +15,9 @@ from numpy.linalg import slogdet
 from scipy.linalg import solve
 import pandas as pd 
 from functools import partial
+import itertools
+from scipy.stats import chi2
+import pandas as pd
 
 from statsmodels.tools.numdiff import (approx_hess, approx_fprime)
 from statsmodels.tools.decorators import cache_readonly
@@ -342,9 +345,25 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         term1 = np.kron(Z_t.T,np.ones(k))@GLS_hat
         return term1
     
-    def _wald_test(lambda, sigma, restrictions):
-        k = len(np.diag(lambda))
-        # k_list = 
+    def _wald_test(lambda_, sigma, restrictions):
+        k = len(np.diag(lambda_))
+        k_list = list(itertools.combinations(range(1:(k+1)), 2))
+        betas = list(itertools.combinations(np.diag(lambda_), 2))
+        mask = [k * k + x[0] - restrictions, k * k + x[1] - restrictions] 
+        sigmas = np.apply_along_axis(lambda x: np.diag(sigma[mask,mask]), axis=1, arr=k_list)
+        cov_s = np.apply_along_axis(lambda x: sigma[mask,mask][0,1], axis=1, arr=k_list)
+
+        p_value = list(map(lambda x: np.round(1 - chi2.cdf((betas[:,x] @ [1,-1]) ** 2 / (np.sum(sigmas[:,x]) - 2 * cov_s[x]), 1), 2), range(1,k*(k-1)/2 +1)))
+
+        test_stat = list(map(lambda x: np.round((betas[:,x]@np.array([1,-1]))**2 / (np.sum(sigmas[:,x]) - 2 * cov_s[x]),2), range(1, k*(k-1)/2)))
+
+        combinations = itertools.combinations(range(1,k+1), 2)
+
+        template = "lambda_{}=lambda_{}"
+        H_null = np.apply_along_axis(lambda x: template.format(x[0],x[1]), axis=1, arr=combinations)
+
+        wald_test = pd.DataFrame(data=[test_stat,p_value], index=H_null, columns=["Test statistic","p-Value"])
+        return wald_test
 
     def _get_init_params(self, A_guess, B_guess):
         pass
