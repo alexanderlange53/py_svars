@@ -40,39 +40,6 @@ class SVAR_CV(tsbase.TimeSeriesModel):
                  format = None, date_vector = None, max_iter = 50, crit = 0.001,\
                  restriction_matrix = None, missing=None):
 
-        '''super(SVAR_CV, self).__init__(endog, None, dates, freq, missing=missing) 
-        #(self.endog, self.names,
-        # self.dates) = data_util.interpret_data(endog, names, dates)
-
-        self.y = self.endog #keep alias for now
-        self.neqs = self.endog.shape[1]
-        self.SB = SB
-
-        #initialize A, B as I if not given
-        #Initialize SVAR masks
-        A = np.identity(self.neqs)
-        self.A_mask = A_mask = np.zeros(A.shape, dtype=bool)
-
-        B = np.identity(self.neqs)
-        self.B_mask = B_mask = np.zeros(B.shape, dtype=bool)
-
-        # convert A and B to numeric
-        #TODO: change this when masked support is better or with formula
-        #integration
-        Anum = np.zeros(A.shape, dtype=float)
-        Anum[~A_mask] = A[~A_mask]
-        Anum[A_mask] = np.nan
-        self.A = Anum
-
-        Bnum = np.zeros(B.shape, dtype=float)
-        Bnum[~B_mask] = B[~B_mask]
-        Bnum[B_mask] = np.nan
-        self.B = Bnum
-
-        #LikelihoodModel.__init__(self, endog)
-
-        #super(SVAR, self).__init__(endog)
-        '''
         self._get_var_object(endog)
         if(SB.isnumeric()):
             self.SB_character = None
@@ -296,8 +263,29 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         
         # Testing the estimated SVAR for identification by means of wald statistic
         # TODO: Implement _wald_test
-        
-        return True
+        wald = self._wald_test(lambda_hat, HESS, restrictions)
+
+        #TODO: set rownames of B_hat, lambda_hat, lambbda_SE and B_SE
+        result = {'lambda': lambda_hat,
+                  'lambda_SE':lambda_SE,
+                  'B': B_hat,
+                  'B_SE': B_SE,
+                  'n': self.Tob,
+                  'fish': HESS,
+                  'lik': -llf,
+                  'wald_statistics': wald,
+                  'iterations': counter,
+                  'method': 'Changes in Volatility',
+                  'SB': SB,
+                  'A_hat': GLSE,
+                  'type': type,
+                  'SB_character': SB_character,
+                  'restrictions': restrictions,
+                  'restriction_matrix': restriction_matrix,
+                  'y': y_out,
+                  'p': p,
+                  'k': k}
+        return result
     
     def _likelihood(self, S, Tob, sigma_hat1, k, sigma_hat2, restriction_matrix, restrictions):
         if restriction_matrix is not None:
@@ -365,106 +353,3 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         wald_test = pd.DataFrame(data=[test_stat,p_value], index=H_null, columns=["Test statistic","p-Value"])
         return wald_test
 
-    def _get_init_params(self, A_guess, B_guess):
-        pass
-    def _estimate_svar(self, start_params, lags, maxiter, maxfun,
-                       trend='c', solver="nm", override=False):
-        pass
-    def loglike(self, params):
-        pass
-    def score(self, AB_mask):
-        pass
-    def hessian(self, AB_mask):
-        pass
-    def _solve_AB(self, start_params, maxiter, maxfun, override=False,
-            solver='bfgs'):
-        pass
-    def _compute_J(self, A_solve, B_solve):
-        pass
-    def check_order(self, J):
-        if np.size(J, axis=0) < np.size(J, axis=1):
-            raise ValueError("Order condition not met: "
-                             "solution may not be unique")
-
-    def check_rank(self, J):
-        rank = np_matrix_rank(J)
-        if rank < np.size(J, axis=1):
-            raise ValueError("Rank condition not met: "
-                             "solution may not be unique.")
-
-class SVAR_CV_Process(VARProcess):
-    def __init__(self, coefs, intercept, sigma_u, A_solve, B_solve,
-    names=None):
-        self.k_ar = len(coefs)
-        self.neqs = coefs.shape[1]
-        self.coefs = coefs
-        self.intercept = intercept
-        self.sigma_u = sigma_u
-        self.A_solve = A_solve
-        self.B_solve = B_solve
-        self.names = names
-
-    def orth_ma_rep(self, maxn=10, P=None):
-        raise NotImplementedError
-
-    def svar_ma_rep(self, maxn=10, P=None):
-        pass
-
-class SVAR_CV_Results(SVAR_CV_Process, VARResults):
-
-    _model_type = 'SVAR_CV'
-
-    def __init__(self, endog, endog_lagged, params, sigma_u, lag_order,
-    A=None, B=None, A_mask=None, B_mask=None, model=None, trend='c',
-    names=None, dates=None):
-        self.model = model
-        self.y = self.endog = endog
-        self.ys_lagged = self.endog_lagged = endog_lagged
-        self.dates = dates
-
-        self.n_totobs, self.neqs = self.endog.shape
-        self.nobs = self.n_totobs - lag_order
-        k_trend = util.get_trendorder(trend)
-        if k_trend > 0:
-            trendorder = k_trend - 1
-        else:
-            trendorder = None
-        self.k_trend = k_trend
-        self.k_exog = k_trend
-        self.trendorder = trendorder
-
-        self.exog_names = util.make_lag_names(names, lag_order, k_trend)
-        self.params = params
-        self.sigma_u = sigma_u
-        
-        # Each matrix needs to be transposed
-        reshaped = self.params[self.k_trend:]
-        reshaped = reshaped.reshaped((lag_order, self.neqs, self.neqs))
-
-        intercept = self.params[0]
-        coefs = reshaped.swapaxes(1,2).copy()
-
-        self.A = A
-        self.B = B
-        self.A_mask = A_mask
-        self.B_mask = B_mask
-
-        super(SVAR_CV_Results, self).__init__(coefs, intercept, sigma_u, A, B, names=names)
-
-    def fevd(self):
-        pass
-
-    def irf(self):
-        pass
-
-    def logLik(self):
-        pass
-
-    def Phi(self):
-        pass
-
-    def print(self):
-        pass
-
-    def summary(self):
-        pass
