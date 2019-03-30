@@ -7,7 +7,7 @@ Created on Sat Dec 22 13:14:53 2018
 """
 
 from __future__ import print_function, division
-from statsmodels.compat.python import range
+# from statsmodels.compat.python import range
 
 import numpy as np
 import numpy.linalg as npl
@@ -41,25 +41,30 @@ class SVAR_CV(tsbase.TimeSeriesModel):
                  restriction_matrix = None, missing=None):
 
         self._get_var_object(endog)
+        SB = str(SB)
+
         if(SB.isnumeric()):
             self.SB_character = None
+            SB = int(SB)
         else:
             self.SB_character = SB
-            self.SB = self._get_structural_break(SB=SB, start=start, end=end, \
+            SB = self._get_structural_break(SB=SB, start=start, end=end, \
                 freq=freq, format=format, date_vector = date_vector)
         
-        TB = self.SB - self.p
+        TB = SB - self.p
         self.max_iter = max_iter
 
-        resid1 = self.u[1:TB-1,]
-        resid2 = self.u[TB:self.Tob,]
+        resid1 = self.u.iloc[1:TB-1,]
+        resid2 = self.u.iloc[TB:self.Tob,]
         sigma_hat1 = np.cross(resid1, resid1) / (TB-1)
         sigma_hat2 = np.cross(resid2, resid2) / (self.Tob-TB+1)
 
-        if(restriction_matrix != None):
-            result_unrestricted = self._identify_volatility(self.endog ,self.SB, u=self.u, k=self.k, y=None, restriction_matrix=None, sigma_hat1=sigma_hat1,\
+        restrictions = 0
+    
+        if restriction_matrix is not None:
+            result_unrestricted = self._identify_volatility(endog ,SB=SB, u=self.u, k=self.k, y=None, restriction_matrix=None, sigma_hat1=sigma_hat1,\
         sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=type)
-            result = self._identify_volatility(self.endog ,self.SB, u=self.u, k=self.k, y=None, restriction_matrix=restriction_matrix, sigma_hat1=sigma_hat1,\
+            result = self._identify_volatility(endog ,SB=SB, u=self.u, k=self.k, y=None, restriction_matrix=restriction_matrix, restrictions=restrictions, sigma_hat1=sigma_hat1,\
         sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=type)
             l_ratio_test_statistics = 2 * (result_unrestricted.lik - result.lik)
             #TODO: pchisq aus R herausfinden
@@ -69,10 +74,12 @@ class SVAR_CV(tsbase.TimeSeriesModel):
             l_ratio_test = pd.DataFrame()
         else:
             restriction_matrix = None
-            result = self._identify_volatility(self.endog ,self.SB, u=self.u, k=self.k, y=None, restriction_matrix=restriction_matrix, sigma_hat1=sigma_hat1,\
+            result = self._identify_volatility(endog ,SB=SB, u=self.u, k=self.k, y=None, restriction_matrix=restriction_matrix, restrictions=restrictions, sigma_hat1=sigma_hat1,\
                                                 sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=type)
+    """
          
         #TODO: Skript zum Testen der Klasse schreiben!!!
+    """
 
     def _get_var_object(self, endog):
         """Get VAR object from Class VARResultsWrapper"""
@@ -105,16 +112,16 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         
         return list(np.where([datetime.strptime(SB) in i for i in date_vector])[0])
     
-    def _identify_volatility(self, x, SB, u, k, y, restriction_matrix, sigma_hat1,\
+    def _identify_volatility(self, x, SB, u, k, y, restriction_matrix, restrictions, sigma_hat1,\
         sigma_hat2, p, TB, crit, y_out, type):
-        if(restriction_matrix != None):
-            B = np.transpose(np.multiply(np.linalg.cholesky(1/self.Tob), np.cross(u,u)))
+        if restriction_matrix is not None:
+            B = np.linalg.cholesky((1/self.Tob) * (u.T@u)).T
             na_elements = np.isnan(restriction_matrix)
             B = B[na_elements]
             restrictions = len(restriction_matrix[not np.isnan(restriction_matrix)])
         else:
-            B = np.transpose(np.linalg.cholesky(1/self.Tob)*np.cross(u,u))
-            B = [B]
+            B = np.linalg.cholesky((1/self.Tob) * (u.T@u)).T
+            # B = [B]
         
         lambda_ = np.ones(k)
         S = [B, lambda_]
@@ -191,7 +198,7 @@ class SVAR_CV(tsbase.TimeSeriesModel):
 
             GLS_hat = GLS1 @ GLS2
 
-            term1 = map(partial(resid_gls, k=k, GLS_hat=GLS_hat), Z_t)
+            term1 = list(map(partial(resid_gls, k=k, GLS_hat=GLS_hat), Z_t))
             ugls = y.T - term1.T
 
             resid1gls = ugls[:TB,]
@@ -309,8 +316,7 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         if any(Psi < 0 or MW < 0.01 or MW2 < 0.01): #Wieso hier any und or?
             return 1e25
         
-        L = -(((TB-1) / 2) * (np.log(MW) + np.sum(np.diag((sigma_hat1 @ solve(MMM)))))) - 
-            (((Tob - TB + 1) / 2) * (np.log(MW2) + np.sum(np.diag((sigma_hat2 @ solve(MMM2))))))
+        L = -(((TB-1) / 2) * (np.log(MW) + np.sum(np.diag((sigma_hat1 @ solve(MMM)))))) - (((Tob - TB + 1) / 2) * (np.log(MW2) + np.sum(np.diag((sigma_hat2 @ solve(MMM2))))))
 
         return -L
 
@@ -333,9 +339,9 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         term1 = np.kron(Z_t.T,np.ones(k))@GLS_hat
         return term1
     
-    def _wald_test(lambda_, sigma, restrictions):
+    def _wald_test(self, lambda_, sigma, restrictions):
         k = len(np.diag(lambda_))
-        k_list = list(itertools.combinations(range(1:(k+1)), 2))
+        k_list = list(itertools.combinations(range(1,(k+1)), 2))
         betas = list(itertools.combinations(np.diag(lambda_), 2))
         mask = [k * k + x[0] - restrictions, k * k + x[1] - restrictions] 
         sigmas = np.apply_along_axis(lambda x: np.diag(sigma[mask,mask]), axis=1, arr=k_list)
