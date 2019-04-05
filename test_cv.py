@@ -7,7 +7,8 @@ from svars_cv import SVAR_CV
 # data contains quartlery observations from 1965Q1 to 2008Q2
 # assumed structural break in 1979Q3
 # x = output gap
-# pi = inflation# i = interest rates
+# pi = inflation
+# # i = interest rates
 
 
 # set.seed(23211)

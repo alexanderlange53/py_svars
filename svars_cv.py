@@ -17,7 +17,7 @@ import pandas as pd
 from functools import partial
 import itertools
 from scipy.stats import chi2
-import pandas as pd
+from scipy.optimize import minimize 
 
 from statsmodels.tools.numdiff import (approx_hess, approx_fprime)
 from statsmodels.tools.decorators import cache_readonly
@@ -31,9 +31,7 @@ from statsmodels.compat.numpy import np_matrix_rank
 
 from datetime import datetime
 from statsmodels.tsa.vector_ar.var_model import VARResultsWrapper
-import scipy.optimize as sopt 
 
-mat = np.array
 
 class SVAR_CV(tsbase.TimeSeriesModel):
     def __init__(self, endog, SB, start =None, end = None, freq = None,\
@@ -121,12 +119,11 @@ class SVAR_CV(tsbase.TimeSeriesModel):
             restrictions = len(restriction_matrix[not np.isnan(restriction_matrix)])
         else:
             B = np.linalg.cholesky((1/self.Tob) * (u.T@u)).T
-            # B = [B]
         
         lambda_ = np.ones(k)
-        S = [B, lambda_]
+        S = np.concatenate((B, lambda_), axis=None)
 
-        MLE = sopt.minimize(fun=self._likelihood, p=S, args=(k,TB, sigma_hat1, sigma_hat2, self.Tob, restriction_matrix, restrictions),method='BFGS', jac=True, opt={"maxiter": 150}) 
+        MLE = minimize(fun=self._likelihood, x0=S, args=(self.Tob, TB, sigma_hat1, k, sigma_hat2, restriction_matrix, restrictions),method='BFGS', jac=True, options={"maxiter": 150}) 
         
         if restriction_matrix is not None:
             na_elements = np.isnan(restriction_matrix)
@@ -220,7 +217,7 @@ class SVAR_CV(tsbase.TimeSeriesModel):
 
             # optimize the likelihood function
             # TODO: Übergeben von Parametern
-            MLE_gls = sopt.minimize(fun=self._likelihood)
+            MLE_gls = minimize(fun=self._likelihood)
 
             if restriction_matrix is not None:
                 na_elements = np.isnan(restriction_matrix)
@@ -294,7 +291,7 @@ class SVAR_CV(tsbase.TimeSeriesModel):
                   'k': k}
         return result
     
-    def _likelihood(self, S, Tob, sigma_hat1, k, sigma_hat2, restriction_matrix, restrictions):
+    def _likelihood(self, S, Tob, TB, sigma_hat1, k, sigma_hat2, restriction_matrix, restrictions):
         if restriction_matrix is not None:
             #if restriction_matrix is not matrix:
             #    raise ValueError("Please provide a valide input matrix")
@@ -309,11 +306,11 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         Psi = np.diag(S[(k*k-restrictions):(k*k+k-restrictions)])
 
         MMM = np.cross(W,W.T)
-        MMM2 = W @ np.cross(Psi,W.T) 
+        MMM2 = W @ np.cross(Psi,W) 
         MW = np.linalg.det(MMM)
         MW2 = np.linalg.det(MMM2)
-
-        if any(Psi < 0 or MW < 0.01 or MW2 < 0.01): #Wieso hier any und or?
+        
+        if (Psi<0).any() < 0 or MW < 0.01 or MW2 < 0.01: 
             return 1e25
         
         L = -(((TB-1) / 2) * (np.log(MW) + np.sum(np.diag((sigma_hat1 @ solve(MMM)))))) - (((Tob - TB + 1) / 2) * (np.log(MW2) + np.sum(np.diag((sigma_hat2 @ solve(MMM2))))))
