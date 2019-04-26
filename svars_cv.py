@@ -18,6 +18,7 @@ from functools import partial
 import itertools
 from scipy.stats import chi2
 from scipy.optimize import minimize 
+# from numpy.linalg import solve
 
 from statsmodels.tools.numdiff import (approx_hess, approx_fprime)
 from statsmodels.tools.decorators import cache_readonly
@@ -61,9 +62,9 @@ class SVAR_CV(tsbase.TimeSeriesModel):
     
         if restriction_matrix is not None:
             result_unrestricted = self._identify_volatility(endog ,SB=SB, u=self.u, k=self.k, y=None, restriction_matrix=None, sigma_hat1=sigma_hat1,\
-        sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=type)
+        sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=self.type)
             result = self._identify_volatility(endog ,SB=SB, u=self.u, k=self.k, y=None, restriction_matrix=restriction_matrix, restrictions=restrictions, sigma_hat1=sigma_hat1,\
-        sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=type)
+        sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=self.type)
             l_ratio_test_statistics = 2 * (result_unrestricted.lik - result.lik)
             #TODO: pchisq aus R herausfinden
             p_value = np.round(1 - pchisq(l_ratio_test_statistics, result.restrictions), 4)
@@ -72,8 +73,8 @@ class SVAR_CV(tsbase.TimeSeriesModel):
             l_ratio_test = pd.DataFrame()
         else:
             restriction_matrix = None
-            result = self._identify_volatility(endog ,SB=SB, u=self.u, k=self.k, y=None, restriction_matrix=restriction_matrix, restrictions=restrictions, sigma_hat1=sigma_hat1,\
-                                                sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=type)
+            result = self._identify_volatility(endog ,SB=SB, u=self.u, k=self.k, y=self.y , restriction_matrix=restriction_matrix, restrictions=restrictions, sigma_hat1=sigma_hat1,\
+                                                sigma_hat2=sigma_hat2, p=self.p, TB=TB, crit=crit, y_out=None, type=self.type)
     """
          
         #TODO: Skript zum Testen der Klasse schreiben!!!
@@ -123,38 +124,34 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         lambda_ = np.ones(k)
         S = np.concatenate((B, lambda_), axis=None)
 
-        MLE = minimize(fun=self._likelihood, x0=S, args=(self.Tob, TB, sigma_hat1, k, sigma_hat2, restriction_matrix, restrictions),method='BFGS', jac=True, options={"maxiter": 150}) 
+        #TODO: Changing the method and set jac on true
+        MLE = minimize(fun=self._likelihood, x0=S, args=(self.Tob, TB, sigma_hat1, k, sigma_hat2, restriction_matrix, restrictions),method='BFGS', jac=False, options={"maxiter": 150}) 
         
         if restriction_matrix is not None:
             na_elements = np.isnan(restriction_matrix)
             B_hat = restriction_matrix
             B_hat[na_elements] = MLE.x[0:sum(na_elements)]
-            lambda_hat = np.diag(MLE.x[sum(na_elements) + 1 : len(MLE.x)])
+            lambda_hat = np.diag(MLE.x[sum(na_elements) : len(MLE.x)])
         else:
             B_hat = np.array(MLE.x[0:(k*k)]).reshape((-1,k))
-            lambda_hat = np.diag(MLE.x[(k*k+1):(k*k+k)])
+            lambda_hat = np.diag(MLE.x[(k*k):(k*k+k)])
             restrictions = 0
         
         #TODO: Minimum von MLE herausfinden
         ll = MLE.x
 
-        yl = self._y_lag_cr(self.y.T, p)['lags']
+        yl = (self._y_lag_cr(self.y.T, p)['lags']).T
         yret = y
-        # y = y[]
-        y_mask = np.ones(len(y), dtype=bool)
-        y_mask[:p] = False
-        y = y[y_mask]
+        y = y[:, p:(y.shape[1])]
 
-        if x.type == 'c':
-            Z_t = np.vstack(np.ones(yl.shape[1]), yl)
-        elif x.type == 't':
-            Z_t = np.vstack(np.arange(p+1,yret.shape[1]), yl)
-        elif x.type == 'b':
-            Z_t = np.vstack(np.ones(yl.shape[1]), np.arange(p+1,yret.shape[1]), yl)
+        if x.trend == 'c':
+            Z_t = np.vstack((np.ones(yl.shape[1]), yl))
+        elif x.trend == 't':
+            Z_t = np.vstack((np.arange(p+1,yret.shape[1]), yl))
+        elif x.trend == 'b':
+            Z_t = np.vstack((np.ones(yl.shape[1]), np.arange(p+1,yret.shape[1])), yl)
         else:
             Z_t = yl
-
-        # R Funktionen in Klassenmethoden umgewandelt
 
         lambda_hat = {0:lambda_hat}
         B_hat = {0:B_hat}
@@ -162,31 +159,35 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         MLE_gls_loop = {0: MLE}
         GLSE = {0: None}
 
-        counter = 1
+        counter = 0
         Exit = 1
         while np.abs(Exit) > crit and counter < self.max_iter:
-            sig1 = solve(B_hat[counter]@B_hat[counter].T)
-            sig2 = solve(B_hat[counter]@(lambda_hat[counter]@B_hat[counter].T))
-
-            GLS1_1 = np.sum(np.apply_along_axis(partial(self._gls1, sig=sig1), axis=1, arr=Z_t[:,:(TB-1)]), axis=1) #sum of each row
-            GLS1_2 = np.sum(np.apply_along_axis(partial(self._gls1, sig=sig2), axis=1, arr=Z_t[:,TB:Z_t.shape[1]]), axis=1) #sum of each row
-
-            if x.type == None:
-                GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p,-1)))
+            B_temp = B_hat[counter]@B_hat[counter].T
+            sig1 = solve(B_temp,np.eye(B_temp.shape[0]))
+            B_temp = B_hat[counter]@(lambda_hat[counter]@B_hat[counter].T) 
+            sig2 = solve(B_temp, np.eye(B_temp.shape[0]))
+            
+            GLS1_1 = np.sum(np.apply_along_axis(self._gls1, axis=0, arr=Z_t[:,:(TB-1)], sig=sig1), axis=1) #sum of each row
+            GLS1_2 = np.sum(np.apply_along_axis(self._gls1, axis=0, arr=Z_t[:,TB:], sig=sig1), axis=1) #sum of each row
+            if x.trend == None:
+                GLS1_temp = (GLS1_1 + GLS1_2).reshape((k*k*p,-1)) 
+                GLS1 = solve(GLS1_temp, np.eye(GLS1_temp.shape[0]))
                 GLS2_1 = np.zeros((k*k*p, TB-1))
                 GLS2_2 = np.zeros((k*k*p, y.shape[1]))
-            elif x.type == 'c' or x.type == 't':
-                GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p+k,-1)))
+            elif x.trend == 'c' or x.type == 't':
+                GLS1_temp = (GLS1_1 + GLS1_2).reshape((k*k*p+k,-1)) 
+                GLS1 = solve(GLS1_temp, np.eye(GLS1_temp.shape[0]))
                 GLS2_1 = np.zeros((k*k*p+k, TB-1))
                 GLS2_2 = np.zeros((k*k*p+k, y.shape[1]))
-            elif x.type == 'b':
-                GLS1 = solve((GLS1_1 + GLS1_2).reshape((k*k*p+k+k,-1)))
+            elif x.trend == 'b':
+                GLS1_temp = (GLS1_1 + GLS1_2).reshape((k*k*p+k+k,-1)) 
+                GLS1 = solve(GLS1_temp, np.eye(GLS1_temp.shape[0]))
                 GLS2_1 = np.zeros((k*k*p+k+k, TB-1))
                 GLS2_2 = np.zeros((k*k*p+k+k, y.shape[1]))
             
-            for i in range(TB):
+            for i in range(TB-1):
                 GLS2_1[:,i] = np.kron(Z_t[:,i], sig1) @ y[:,i]
-            for i in range(TB,Z_t.shape[1]+1):
+            for i in range(TB-1,Z_t.shape[1]):
                 GLS2_2[:,i] = np.kron(Z_t[:,i], sig2) @ y[:,i]
             
             GLS2_1 = np.sum(GLS2_1, axis=1)
@@ -195,7 +196,7 @@ class SVAR_CV(tsbase.TimeSeriesModel):
 
             GLS_hat = GLS1 @ GLS2
 
-            term1 = list(map(partial(resid_gls, k=k, GLS_hat=GLS_hat), Z_t))
+            term1 = list(map(partial(self._resid_gls, k=k, GLS_hat=GLS_hat), Z_t))
             ugls = y.T - term1.T
 
             resid1gls = ugls[:TB,]
@@ -318,9 +319,9 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         return -L
 
     def _y_lag_cr(self, y, lag_length):
-        y_lag = np.full((y.shape()[0], y.shape()[1] * lag_length), np.nan)
-        for i in range(lag_length):
-            y_lag[(1+i):y.shape()[0], (((i-1) * y.shape()[1]) + 1):(i*y.shape()[1])] = y[:(y.shape()[0] - i), :y.shape()[0]]
+        y_lag = np.full((y.shape[0], y.shape[1] * lag_length), np.nan)
+        for i in range(1,lag_length+1):
+            y_lag[(i):y.shape[0], ((i * y.shape[1] - y.shape[1])):(i * y.shape[1])] = y[:(y.shape[0] - i), :y.shape[0]] # Important: changes may be wrong!
         
         y_lag_mask = np.ones(len(y_lag), dtype=bool)
         y_lag_mask[:lag_length] = False
@@ -328,9 +329,9 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         out = {'lags':y_lag} #In R wird eine list zurückgegeben...
         return out
     
-    def _gls1(self, sig, Z):
-        G = np.kron(Z@Z.T, sig)
-        return G
+    def _gls1(self, Z, sig):
+        G = np.kron(np.matmul(Z.T, Z), sig)
+        return G.flatten()
     
     def _resid_gls(self, Z_t, k, GLS_hat):
         term1 = np.kron(Z_t.T,np.ones(k))@GLS_hat
