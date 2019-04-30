@@ -53,10 +53,10 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         TB = SB - self.p
         self.max_iter = max_iter
 
-        resid1 = self.u.iloc[1:TB-1,]
-        resid2 = self.u.iloc[TB:self.Tob,]
-        sigma_hat1 = np.cross(resid1, resid1) / (TB-1)
-        sigma_hat2 = np.cross(resid2, resid2) / (self.Tob-TB+1)
+        resid1 = self.u.iloc[0:TB-1,]
+        resid2 = self.u.iloc[TB-1:self.Tob,]
+        sigma_hat1 = resid1.T@resid1 / (TB-1)
+        sigma_hat2 = resid2.T@resid2 / (self.Tob-TB+1)
 
         restrictions = 0
     
@@ -121,11 +121,12 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         else:
             B = np.linalg.cholesky((1/self.Tob) * (u.T@u)).T
         
+
         lambda_ = np.ones(k)
         S = np.concatenate((B, lambda_), axis=None)
 
         #TODO: Changing the method and set jac on true
-        MLE = minimize(fun=self._likelihood, x0=S, args=(self.Tob, TB, sigma_hat1, k, sigma_hat2, restriction_matrix, restrictions),method='BFGS', jac=False, options={"maxiter": 150}) 
+        MLE = minimize(fun=self._likelihood, x0=S, args=(self.Tob, TB, sigma_hat1, k, sigma_hat2, restriction_matrix, restrictions),method='BFGS', options={"maxiter": 150}) 
         
         if restriction_matrix is not None:
             na_elements = np.isnan(restriction_matrix)
@@ -138,7 +139,7 @@ class SVAR_CV(tsbase.TimeSeriesModel):
             restrictions = 0
         
         #TODO: Minimum von MLE herausfinden
-        ll = MLE.x
+        ll = MLE.fun
 
         yl = (self._y_lag_cr(self.y.T, p)['lags']).T
         yret = y
@@ -196,13 +197,13 @@ class SVAR_CV(tsbase.TimeSeriesModel):
 
             GLS_hat = GLS1 @ GLS2
 
-            term1 = list(map(partial(self._resid_gls, k=k, GLS_hat=GLS_hat), Z_t))
+            term1 = np.apply_along_axis(partial(self._resid_gls, k=k, GLS_hat=GLS_hat), axis=0, arr=Z_t)
             ugls = y.T - term1.T
 
-            resid1gls = ugls[:TB,]
-            resid2gls = ugls[TB:self.Tob,]
+            resid1gls = ugls[:TB-1,]
+            resid2gls = ugls[TB-1:self.Tob,]
             sigma_hat1gls = resid1gls.T @ resid1gls / (TB-1) 
-            sigma_hat2gls = resid2gls.T @ resid1gls / (self.Tob-TB+1)
+            sigma_hat2gls = resid2gls.T @ resid2gls / (self.Tob-TB+1)
 
             # Determine starting values for B and Lambda
             if restriction_matrix is not None:
@@ -214,11 +215,11 @@ class SVAR_CV(tsbase.TimeSeriesModel):
                 B = np.linalg.cholesky(1/self.Tob * (u.T@u)).T
 
             lambda_ = np.ones((k,1))
-            S = [B, lambda_]
+            S = np.concatenate((B, lambda_), axis=None)
 
             # optimize the likelihood function
             # TODO: Übergeben von Parametern
-            MLE_gls = minimize(fun=self._likelihood)
+            MLE_gls = minimize(fun=self._likelihood, x0=S, args=(self.Tob, TB, sigma_hat1gls, k, sigma_hat2gls, restriction_matrix, restrictions),method='BFGS', jac=False, options={"maxiter": 150}) 
 
             if restriction_matrix is not None:
                 na_elements = np.isnan(restriction_matrix)
@@ -228,15 +229,15 @@ class SVAR_CV(tsbase.TimeSeriesModel):
                 B_hatg = MLE_gls.x[:k*k].reshape(k,-1)
                 lambda_hatg = np.diag(MLE_gls.x[k*k+1:k*k+k])
             
-            ll_g = MLE_gls.x
+            ll_g = MLE_gls.fun
 
+            counter += 1
             lambda_hat[counter] = lambda_hatg
             B_hat[counter] = B_hatg
             ll[counter] = ll_g
-            GLSE[counter] = GLSE_hat
+            GLSE[counter] = GLS_hat
             MLE_gls_loop[counter] = MLE_gls
             Exit = ll[counter] - ll[counter - 1]
-            counter += 1
         
         ll = np.array(list(ll.values()))
         cc = ll.argmin()
@@ -249,7 +250,7 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         MLEgls = MLE_gls_loop[cc]
 
         # obtaining standard errors from inverse fisher information matrix
-        HESS = solve(MLE_gls.hes)
+        HESS = solve(MLE_gls.hes, np.eye(MLE_gls.hes.shape[0]))
 
         for i in range(HESS.shape()[0]):
             if(HESS[i,i] < 0):
@@ -301,20 +302,21 @@ class SVAR_CV(tsbase.TimeSeriesModel):
             to_fill_matrix[na_elements] = S[:np.sum(na_elements)]
             W = to_fill_matrix
         else:
-            W = np.asmatrix(S[:(k*k)].reshape((k,-1)))
+            W = np.asmatrix(S[:(k*k)].reshape((k,-1))).T
             restrictions = 0
         
         Psi = np.diag(S[(k*k-restrictions):(k*k+k-restrictions)])
 
-        MMM = np.cross(W,W.T)
-        MMM2 = W @ np.cross(Psi,W) 
+        MMM = W@W.T
+        MMM2 = W@(Psi@W.T)
         MW = np.linalg.det(MMM)
         MW2 = np.linalg.det(MMM2)
         
         if (Psi<0).any() < 0 or MW < 0.01 or MW2 < 0.01: 
             return 1e25
         
-        L = -(((TB-1) / 2) * (np.log(MW) + np.sum(np.diag((sigma_hat1 @ solve(MMM)))))) - (((Tob - TB + 1) / 2) * (np.log(MW2) + np.sum(np.diag((sigma_hat2 @ solve(MMM2))))))
+        L = -(((TB-1) / 2) * (np.log(MW) + np.sum(np.diag((sigma_hat1 @ solve(MMM, np.eye(MMM.shape[0]))))))) - \
+            (((Tob - TB + 1) / 2) * (np.log(MW2) + np.sum(np.diag((sigma_hat2 @ solve(MMM2, np.eye(MMM2.shape[0])))))))
 
         return -L
 
@@ -334,8 +336,8 @@ class SVAR_CV(tsbase.TimeSeriesModel):
         return G.flatten()
     
     def _resid_gls(self, Z_t, k, GLS_hat):
-        term1 = np.kron(Z_t.T,np.ones(k))@GLS_hat
-        return term1
+        term1 = np.kron(Z_t,np.eye(k))@GLS_hat
+        return term1.flatten()
     
     def _wald_test(self, lambda_, sigma, restrictions):
         k = len(np.diag(lambda_))
