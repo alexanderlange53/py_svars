@@ -1,1 +1,5 @@
-__pycache__/svars_cv.cpython-37.pyc
+/.vscode
+/.ipynb_checkpoints
+/__pycache__
+*.code-workspace
+*.ipynb

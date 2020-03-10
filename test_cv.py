@@ -13,15 +13,17 @@ from svars_cv import SVAR_CV
 
 # set.seed(23211)
 np.random.seed(23211)
-USA = pd.read_csv('USA.csv',sep=',', header=0, index_col=0)
+USA = pd.read_csv('USA.csv', sep=',', header=0, index_col=0)
 # v1 <- vars::VAR(USA, lag.max = 10, ic = "AIC" )
 v1 = VAR(USA)
-v1 = v1.fit(maxlags=10,ic='aic')
+v1 = v1.fit(maxlags=10, ic='aic')
 
 # print(v1.summary())
 
 # x1 <- id.cv(v1, SB = 59)
 x1 = SVAR_CV(v1, SB=59)
+print(x1.result)
+print("Das war das Ergebnis")
 """
 summary(x1)
 
